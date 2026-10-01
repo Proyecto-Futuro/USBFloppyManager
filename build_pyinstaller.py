@@ -3,7 +3,7 @@ Hay que ejecutarlo en cada sistema operativo (PyInstaller no compila de forma cr
 import subprocess
 import sys
 
-COMMON = ["--noconfirm", "--clean", "--collect-all", "pyfatfs", "--collect-all", "fs", "--collect-all", "sv_ttk"]
+COMMON = ["--noconfirm", "--clean", "--collect-all", "pyfatfs", "--collect-all", "fs", "--collect-all", "sv_ttk", "--collect-all", "tkinterdnd2"]
 try:
     import tkinterdnd2  # noqa: F401
     COMMON += ["--collect-all", "tkinterdnd2"]

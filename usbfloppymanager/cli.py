@@ -24,7 +24,8 @@ def _describe(d: Device) -> str:
 
 
 def _open(a, writable=False) -> Device:
-    return Device(a.device, writable=writable, slots=a.slots, force=getattr(a, "force", False))
+    return Device(a.device, writable=writable, slots=a.slots, force=getattr(a, "force", False),
+                  unmount=getattr(a, "unmount", False))
 
 
 def cmd_devices(a):
@@ -186,6 +187,8 @@ def build_parser():
         if write:
             sp.add_argument("--force", action="store_true",
                             help="permitir dispositivos no extraíbles/montados (NUNCA el disco del sistema)")
+            sp.add_argument("--unmount", action="store_true",
+                            help="desmontar antes los volúmenes montados del USB (Linux)")
         sp.set_defaults(fn=fn)
         return sp
 

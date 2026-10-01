@@ -109,23 +109,62 @@ def _linux_info(name: str, sys_block: str = "/sys/block"):
     return removable or usb, size, model
 
 
-def linux_mounts_for_disk(disk: str, mounts_text: Optional[str] = None) -> List[str]:
+def linux_mount_pairs(disk: str, mounts_text: Optional[str] = None) -> List[tuple[str, str]]:
+    """[(nodo /dev/..., punto de montaje)] de los volúmenes montados que pertenecen a `disk`."""
     if mounts_text is None:
         try:
             with open("/proc/self/mounts") as f:
                 mounts_text = f.read()
         except OSError:
             return []
-    points = []
+    pairs = []
     for dev, mp in parse_mounts(mounts_text):
         if dev.startswith("/dev/"):
             real = os.path.realpath(dev)
             try:
                 if _linux_disk_name(os.path.basename(real)) == disk:
-                    points.append(mp)
+                    pairs.append((real, mp))
             except OSError:
                 continue
-    return points
+    return pairs
+
+
+def linux_mounts_for_disk(disk: str, mounts_text: Optional[str] = None) -> List[str]:
+    return [mp for _, mp in linux_mount_pairs(disk, mounts_text)]
+
+
+def unmount_target(path: str) -> List[str]:
+    """Desmonta los volúmenes montados del disco `path` (Linux). El escritorio monta solo el slot 0, porque
+    el primer sector del USB parece un disquete FAT normal. Nunca toca el disco del sistema.
+    Devuelve los puntos de montaje desmontados."""
+    if not sys.platform.startswith("linux"):
+        return []
+    try:
+        if not stat.S_ISBLK(os.stat(path).st_mode):
+            return []
+    except OSError:
+        return []
+    disk = _linux_disk_name(os.path.basename(os.path.realpath(path)))
+    pairs = linux_mount_pairs(disk)
+    if any(mp in SYSTEM_MOUNTS for _, mp in pairs):
+        raise GotekError(f"{path} contiene el sistema operativo: no se desmonta ni se escribe.")
+    done = []
+    for node, mp in pairs:
+        errors = []
+        for cmd in (["udisksctl", "unmount", "-b", node], ["umount", mp]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.SubprocessError) as e:
+                errors.append(str(e))
+                continue
+            if r.returncode == 0:
+                done.append(mp)
+                break
+            errors.append((r.stderr or r.stdout).strip())
+        else:
+            raise GotekError(f"No se pudo desmontar {mp}: {' / '.join(e for e in errors if e)}. "
+                             "Cierra el explorador de archivos o desmóntalo a mano (sudo umount).")
+    return done
 
 
 def list_usb_devices(include_fixed: bool = False) -> List[UsbDevice]:

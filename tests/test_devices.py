@@ -84,3 +84,48 @@ def test_list_usb_devices_runs():
 
 def test_permission_hint_mentions_how_to_fix():
     assert "sudo" in devices.permission_hint("/dev/sdb") or "administrador" in devices.permission_hint("x")
+
+
+def test_unmount_noop_for_image_files(img):
+    assert devices.unmount_target(img) == []
+    with Device(img, writable=True, unmount=True):
+        pass
+
+
+def test_unmount_refuses_system_disk(monkeypatch):
+    monkeypatch.setattr(devices.stat, "S_ISBLK", lambda m: True)
+    monkeypatch.setattr(devices.sys, "platform", "linux")
+    monkeypatch.setattr(devices, "_linux_disk_name", lambda n: "sda")
+    monkeypatch.setattr(devices, "linux_mount_pairs", lambda d, t=None: [("/dev/sda1", "/")])
+    with pytest.raises(GotekError, match="sistema"):
+        devices.unmount_target("/dev/null")
+
+
+def test_unmount_runs_udisks_then_umount(monkeypatch):
+    calls = []
+
+    class R:
+        def __init__(self, rc): self.returncode, self.stderr, self.stdout = rc, "boom", ""
+
+    def fake_run(cmd, **k):
+        calls.append(cmd[0])
+        return R(1 if cmd[0] == "udisksctl" else 0)   # udisks falla -> se prueba umount
+    monkeypatch.setattr(devices.stat, "S_ISBLK", lambda m: True)
+    monkeypatch.setattr(devices.sys, "platform", "linux")
+    monkeypatch.setattr(devices, "_linux_disk_name", lambda n: "sdz")
+    monkeypatch.setattr(devices, "linux_mount_pairs", lambda d, t=None: [("/dev/sdz", "/media/x/FD000")])
+    monkeypatch.setattr(devices.subprocess, "run", fake_run)
+    assert devices.unmount_target("/dev/null") == ["/media/x/FD000"]
+    assert calls == ["udisksctl", "umount"]
+
+
+def test_unmount_failure_reports(monkeypatch):
+    class R:
+        returncode, stderr, stdout = 1, "target is busy", ""
+    monkeypatch.setattr(devices.stat, "S_ISBLK", lambda m: True)
+    monkeypatch.setattr(devices.sys, "platform", "linux")
+    monkeypatch.setattr(devices, "_linux_disk_name", lambda n: "sdz")
+    monkeypatch.setattr(devices, "linux_mount_pairs", lambda d, t=None: [("/dev/sdz", "/media/x")])
+    monkeypatch.setattr(devices.subprocess, "run", lambda *a, **k: R())
+    with pytest.raises(GotekError, match="busy"):
+        devices.unmount_target("/dev/null")

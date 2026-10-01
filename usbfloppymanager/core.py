@@ -131,13 +131,15 @@ class Device:
     de `devices.check_writable_target` (sólo extraíbles; nunca el disco del sistema)."""
 
     def __init__(self, path: str, writable: bool = False, slots: Optional[int] = None,
-                 force: bool = False):
+                 force: bool = False, unmount: bool = False):
         from . import devices  # import tardío: evita ciclo
         self.path = path
         self.writable = writable
         self.force = force
         self._winraw = None
         if writable:
+            if unmount:
+                devices.unmount_target(path)
             devices.check_writable_target(path, force)
         try:
             if devices.is_windows_raw_path(path):

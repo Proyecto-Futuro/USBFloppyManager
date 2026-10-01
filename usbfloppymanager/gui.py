@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import queue
+import shutil
 import sys
+import tempfile
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -21,10 +23,10 @@ try:  # tema moderno opcional (aspecto Windows 11, claro/oscuro)
 except Exception:  # pragma: no cover
     sv_ttk = None
 
-try:  # arrastrar y soltar es opcional
-    from tkinterdnd2 import DND_FILES, TkinterDnD
+try:  # arrastrar y soltar (tkinterdnd2); si falta, se usan los botones
+    from tkinterdnd2 import COPY, DND_FILES, REFUSE_DROP, TkinterDnD
 except Exception:  # pragma: no cover
-    DND_FILES = TkinterDnD = None
+    COPY = DND_FILES = REFUSE_DROP = TkinterDnD = None
 
 
 def system_prefers_dark() -> bool:
@@ -55,8 +57,16 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title(f"USBFloppyManager {__version__}")
-        root.geometry("1150x760")
-        root.minsize(900, 600)
+        root.geometry("1280x800")
+        root.minsize(1000, 600)
+        try:  # maximizada por defecto (Windows / algunos gestores Linux)
+            root.state("zoomed")
+        except tk.TclError:
+            try:
+                root.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
+        self._drag_tmp = None
         self.q: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self.devices: list[UsbDevice] = []
         self.images: list[str] = []
@@ -75,6 +85,7 @@ class App:
             sv_ttk.set_theme("dark" if system_prefers_dark() else "light")
         style = ttk.Style()
         style.configure("Treeview", rowheight=26)
+        self._apply_dialog_colors()
         style.configure("Title.TLabel", font=("TkDefaultFont", 11, "bold"))
         self._build()
         self._poll()
@@ -178,11 +189,13 @@ class App:
     def _build_slots_tab(self):
         f = ttk.Frame(self.nb, padding=4)
         self.nb.add(f, text="Disquetes")
+        self.actions = ttk.Frame(f)           # barra de acciones, abajo del todo
+        self.actions.pack(side="bottom", fill="x", pady=(8, 0))
         paned = ttk.PanedWindow(f, orient="horizontal")
-        paned.pack(fill="both", expand=True)
+        paned.pack(side="top", fill="both", expand=True)
 
         left = ttk.Frame(paned)
-        paned.add(left, weight=1)
+        paned.add(left, weight=3)
         cols = ("n", "label", "files", "bar", "valid")
         self.slots = ttk.Treeview(left, columns=cols, show="headings", selectmode="extended")
         for c, t, w in (("n", "Nº", 40), ("label", "Etiqueta", 90), ("files", "Archivos", 65),
@@ -193,17 +206,8 @@ class App:
         self.slots.configure(yscrollcommand=sb.set)
         self.slots.pack(side="top", fill="both", expand=True)
         self.slots.bind("<<TreeviewSelect>>", lambda e: self.on_slot_select())
-        for group in ((("Formatear", self.act_format), ("Formatear todos", self.act_format_all),
-                       ("Etiqueta…", self.act_label)),
-                      (("Importar .img…", self.act_import), ("Exportar .img…", self.act_export),
-                       ("Copia de seguridad…", self.act_backup), ("Restaurar…", self.act_restore))):
-            row = ttk.Frame(left)
-            row.pack(fill="x", pady=2)
-            for text, cmd in group:
-                ttk.Button(row, text=text, command=cmd).pack(side="left", padx=2)
-
         right = ttk.Frame(paned)
-        paned.add(right, weight=1)
+        paned.add(right, weight=2)
         self.explorer_title = tk.StringVar(value="Selecciona un disquete")
         ttk.Label(right, textvariable=self.explorer_title, style="Title.TLabel").pack(anchor="w", pady=(0, 4))
         self.files = ttk.Treeview(right, columns=("size",), selectmode="extended")
@@ -211,24 +215,50 @@ class App:
         self.files.heading("size", text="Tamaño")
         self.files.column("size", width=90, anchor="e")
         self.files.pack(fill="both", expand=True)
-        for group in ((("Añadir…", self.act_add), ("Añadir carpeta…", self.act_add_dir),
-                       ("Nueva carpeta…", self.act_mkdir)),
-                      (("Extraer…", self.act_extract), ("Borrar", self.act_delete))):
-            row = ttk.Frame(right)
-            row.pack(fill="x", pady=2)
-            for text, cmd in group:
-                ttk.Button(row, text=text, command=cmd,
-                           style=self.accent if text == "Añadir…" else "TButton").pack(side="left", padx=2)
+        self._build_actions()
+        hint = "Arrastra archivos aquí para añadirlos; arrastra desde aquí al explorador para extraerlos."
         if TkinterDnD is not None:
             try:
                 self.files.drop_target_register(DND_FILES)
                 self.files.dnd_bind("<<Drop>>", self.on_drop)
-                ttk.Label(right, text="Puedes arrastrar archivos aquí.").pack(anchor="w")
+                self.files.drag_source_register(1, DND_FILES)
+                self.files.dnd_bind("<<DragInitCmd>>", self.on_drag_init)
             except Exception:  # noqa: BLE001
-                pass
+                hint = "(El arrastrar y soltar no está disponible; usa los botones.)"
         else:
-            ttk.Label(right, text="(Instala tkinterdnd2 para arrastrar y soltar; mientras, usa «Añadir».)"
-                      ).pack(anchor="w")
+            hint = "(Instala tkinterdnd2 para arrastrar y soltar; mientras, usa los botones.)"
+        ttk.Label(right, text=hint).pack(anchor="w", pady=(4, 0))
+
+    def _build_actions(self):
+        """Tres grupos en una fila (en dos si la ventana es estrecha)."""
+        groups = (
+            ("Disquete seleccionado", (("Formatear", self.act_format), ("Etiqueta…", self.act_label),
+                                       ("Importar .img…", self.act_import),
+                                       ("Exportar .img…", self.act_export))),
+            ("USB completo", (("Formatear todos", self.act_format_all),
+                              ("Copia de seguridad…", self.act_backup), ("Restaurar copia…", self.act_restore))),
+            ("Archivos del disquete", (("Añadir…", self.act_add), ("Añadir carpeta…", self.act_add_dir),
+                                       ("Nueva carpeta…", self.act_mkdir), ("Extraer…", self.act_extract),
+                                       ("Borrar", self.act_delete))),
+        )
+        self._action_groups = []
+        for title, buttons in groups:
+            lf = ttk.LabelFrame(self.actions, text=title, padding=(6, 2, 6, 6))
+            for text, cmd in buttons:
+                ttk.Button(lf, text=text, command=cmd,
+                           style=self.accent if text == "Añadir…" else "TButton").pack(side="left", padx=2)
+            self._action_groups.append(lf)
+        self.actions.bind("<Configure>", self._relayout_actions)
+        self._relayout_actions()
+
+    def _relayout_actions(self, _event=None):
+        wide = self.actions.winfo_width() >= 1500 or self.actions.winfo_width() <= 1
+        for i, lf in enumerate(self._action_groups):
+            lf.grid_forget()
+            if wide or i < 2:
+                lf.grid(row=0, column=i, padx=(0, 8), sticky="w")
+            else:
+                lf.grid(row=1, column=0, columnspan=2, pady=(6, 0), sticky="w")
 
     def _build_batch_tab(self):
         f = ttk.Frame(self.nb, padding=8)
@@ -263,6 +293,26 @@ class App:
     def toggle_theme(self):
         if sv_ttk is not None:
             sv_ttk.toggle_theme()
+            self._apply_dialog_colors()
+
+    def _apply_dialog_colors(self):
+        """Los selectores de archivos de Tk no usan ttk: sin esto, en modo oscuro el texto sale ilegible."""
+        st = ttk.Style()
+        bg = st.lookup("TEntry", "fieldbackground") or st.lookup("TFrame", "background") or "white"
+        fg = st.lookup("TLabel", "foreground") or "black"
+        frame = st.lookup("TFrame", "background") or bg
+        for pat, val in (("*Listbox.background", bg), ("*Listbox.foreground", fg),
+                         ("*Listbox.selectBackground", "#0067c0"), ("*Listbox.selectForeground", "white"),
+                         ("*Canvas.background", bg), ("*Entry.background", bg), ("*Entry.foreground", fg),
+                         ("*Entry.insertBackground", fg), ("*Text.background", bg), ("*Text.foreground", fg),
+                         ("*Dialog.background", frame), ("*TkFDialog*background", frame),
+                         ("*TkFDialog*foreground", fg), ("*TkChooseDir*background", frame),
+                         ("*TkChooseDir*foreground", fg), ("*Menu.background", frame), ("*Menu.foreground", fg)):
+            self.root.option_add(pat, val, 80)
+        try:
+            self.logbox.configure(background=bg, foreground=fg)
+        except (AttributeError, tk.TclError):
+            pass
 
     # ------------------------------------------------------------ utilidades UI
     def status(self, s: str):
@@ -292,13 +342,15 @@ class App:
 
     def confirm(self, what: str) -> bool:
         return messagebox.askyesno("Confirmar operación destructiva",
-                                   f"{what}\n\n{self.describe_target()}\n\nEsta operación NO se puede deshacer. ¿Continuar?",
+                                   f"{what}\n\n{self.describe_target()}\n\nSi el sistema ha montado el USB, se desmontará automáticamente.\n"
+                                   "Esta operación NO se puede deshacer. ¿Continuar?",
                                    icon="warning", default="no")
 
     def open_dev(self, writable=False) -> Device:
         if not self._ctx_path:
             raise GotekError("Selecciona primero un dispositivo o abre una imagen.")
-        return Device(self._ctx_path, writable=writable, force=self._ctx_force, slots=self._ctx_slots)
+        return Device(self._ctx_path, writable=writable, force=self._ctx_force, slots=self._ctx_slots,
+                      unmount=writable)  # si el sistema montó el USB, se desmonta solo
 
     def _slots_limit(self):
         try:
@@ -455,6 +507,25 @@ class App:
 
     def on_drop(self, event):
         self.add_paths(list(self.root.tk.splitlist(event.data)))
+        return COPY
+
+    def on_drag_init(self, event):
+        """Arrastrar hacia fuera: extrae lo seleccionado a una carpeta temporal y ofrece esas rutas."""
+        sel, n = self.files.selection(), self.current_slot
+        if not sel or n is None or self.busy or not self.path:
+            return REFUSE_DROP
+        try:
+            if self._drag_tmp:
+                shutil.rmtree(self._drag_tmp, ignore_errors=True)
+            self._drag_tmp = tempfile.mkdtemp(prefix="usbfloppy-")
+            with Device(self.path, slots=self._slots_limit()) as d, Slot(d, n) as sl:
+                for p in sel:
+                    extract_tree(sl, p, self._drag_tmp)
+            paths = tuple(os.path.join(self._drag_tmp, p.rstrip("/").rsplit("/", 1)[-1]) for p in sel)
+            return (COPY, DND_FILES, paths)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"ERROR al preparar el arrastre: {e}")
+            return REFUSE_DROP
 
     def act_extract(self):
         sel, n = self.files.selection(), self.current_slot
@@ -638,8 +709,10 @@ class App:
 
 def main() -> int:
     root = TkinterDnD.Tk() if TkinterDnD is not None else tk.Tk()
-    App(root)
+    app = App(root)
     root.mainloop()
+    if app._drag_tmp:
+        shutil.rmtree(app._drag_tmp, ignore_errors=True)
     return 0
 
 

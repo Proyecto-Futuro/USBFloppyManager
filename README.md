@@ -22,7 +22,6 @@ válidos para dispositivos en crudo de Windows. Ninguna operación escribe fuera
 
 ```bash
 pip install .            # instala los comandos usbfloppy y usbfloppy-gui
-pip install ".[dnd]"     # opcional: arrastrar y soltar en la GUI (tkinterdnd2)
 # La GUI usa el tema moderno sv-ttk (claro/oscuro, botón ☾/☀); se instala automáticamente.
 ```
 Requiere Python ≥ 3.10. La GUI necesita `tkinter` (Debian/Ubuntu: `sudo apt install python3-tk`).
@@ -44,14 +43,16 @@ usbfloppy put DISP 3 a.txt b.bin [--dest dir] [--short-names]
 usbfloppy mkdir DISP 3 carpeta [--short-names]
 usbfloppy get DISP 3 /dir/a.txt -o a.txt      # también carpetas completas (-o directorio)
 usbfloppy rm DISP 3 /dir
-usbfloppy export DISP 3 slot3.img             # un slot -> .img
+usbfloppy export DISP 3 slot3.img             # UN disquete -> .img (1,44 MB, utilizable en emuladores)
 usbfloppy import DISP 3 slot3.img [-y]        # .img -> slot
-usbfloppy backup DISP copia.img               # copia completa (misma disposición que el USB)
+usbfloppy backup DISP copia.img               # copia de TODO el USB (todos los slots; un solo archivo)
 usbfloppy restore DISP copia.img [-y]
 usbfloppy batch [-d DISP] ORIGEN SLOT_INICIAL MODO [--dry-run] [--short-names] [-y]
 usbfloppy gui
 ```
-Las operaciones destructivas piden confirmación (`-y` para omitirla) mostrando dispositivo y tamaño.
+`export`/`import` trabajan con **un** disquete; `backup`/`restore` con **todo** el USB.
+En Linux el escritorio suele montar solo el slot 0 (el primer sector parece un disquete normal): añade `--unmount`
+para desmontarlo antes de escribir (la GUI lo hace sola). Las operaciones destructivas piden confirmación (`-y` para omitirla) mostrando dispositivo y tamaño.
 
 ### Copia por lotes (modos de `GotekTool.sh`)
 
@@ -73,7 +74,7 @@ ejecuta el mismo código que la copia real sobre imágenes en memoria**, así qu
 
 `usbfloppy-gui` (o `python usbfloppy_gui.py`): selector de dispositivo (USB detectados o imagen) con recarga;
 tabla de slots con barra de uso; explorador del slot (añadir archivos/carpetas, arrastrar y soltar con
-`tkinterdnd2`, extraer, borrar, nueva carpeta); formatear, etiqueta, importar/exportar `.img`, copia de seguridad y
+`tkinterdnd2`, también hacia fuera para extraer, extraer, borrar, nueva carpeta); formatear, etiqueta, importar/exportar `.img`, copia de seguridad y
 restauración; pestaña «Copia por lotes» con vista previa en árbol, progreso, cancelación y registro. Las operaciones
 largas corren en un hilo. Toda acción de la GUI tiene su equivalente en la CLI.
 
