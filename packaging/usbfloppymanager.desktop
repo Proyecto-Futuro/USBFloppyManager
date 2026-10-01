@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=USBFloppyManager
+Comment=Gestor de USB para Gotek (firmware original)
+Exec=usbfloppymanager
+Icon=usbfloppymanager
+Categories=Utility;System;
+Terminal=false

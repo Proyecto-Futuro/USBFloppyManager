@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usbfloppymanager"
+version = "0.2.0"
+description = "Gestor de USB para Gotek con firmware original (disquetes FAT12 en crudo)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pyfatfs>=1.1.0", "setuptools<81"]  # fs (dep. de pyfatfs) necesita pkg_resources
+
+[project.optional-dependencies]
+dnd = ["tkinterdnd2"]
+test = ["pytest"]
+build = ["pyinstaller"]
+
+[project.scripts]
+usbfloppy = "usbfloppymanager.cli:main"
+
+[project.gui-scripts]
+usbfloppy-gui = "usbfloppymanager.gui:main"
+
+[tool.setuptools]
+packages = ["usbfloppymanager"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
