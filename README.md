@@ -126,10 +126,10 @@ python build_pyinstaller.py    # ejecutar en cada SO: .exe en Windows, binario e
 funciona como la CLI: `./USBFloppyManager-x86_64.AppImage list /dev/sdX`). Para abrir un USB en crudo hace falta root:
 `sudo ./USBFloppyManager-x86_64.AppImage` (si no abre ventana: `xhost +si:localuser:root` y `sudo -E ...`).
 
-El workflow `.github/workflows/release.yml` ejecuta los tests en cada push y, al subir un tag `vX.Y.Z`, compila el
-AppImage y binario de CLI `usbfloppy-linux-x86_64` (Linux) y los `.exe` (Windows) y los adjunta a la release de GitHub:
+El workflow `.github/workflows/release.yml` ejecuta los tests en cada push, compila el AppImage y el binario de CLI
+`usbfloppy-linux-x86_64` (Linux) y los `.exe` (Windows) y, **en `main`, publica automáticamente la release `vX.Y.Z`**
+(X.Y.Z = `__version__`) si esa versión aún no tiene release. Para sacar una versión nueva basta con subir
+`__version__` en `usbfloppymanager/__init__.py` y hacer push. También se puede lanzar a mano desde
+Actions → «CI y release» → «Run workflow».
 
-```bash
-git tag v0.3.0 && git push origin v0.3.0   # el tag debe coincidir con __version__
-```
 El `.exe` y el AppImage compilado en CI no están probados con hardware real (ver «Pendiente de validar»).

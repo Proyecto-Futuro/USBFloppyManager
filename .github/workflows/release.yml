@@ -3,8 +3,8 @@ name: CI y release
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
+  workflow_dispatch:   # botón «Run workflow» en la pestaña Actions
 
 jobs:
   test:
@@ -16,11 +16,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y dosfstools mtools python3-tk xvfb
       - run: pip install ".[test]"
       - run: pytest -q
-      - name: La versión del código debe coincidir con el tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          V=$(python -c "import usbfloppymanager as u; print(u.__version__)")
-          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "El tag ${GITHUB_REF_NAME} no coincide con __version__=$V"; exit 1; }
 
   appimage:
     needs: test
@@ -64,17 +59,35 @@ jobs:
         with: { name: windows, path: dist/*.exe }
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publica vX.Y.Z (X.Y.Z = __version__) si esa versión todavía no tiene release.
+    # Para lanzar una versión nueva: sube __version__ en usbfloppymanager/__init__.py y haz push a main.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [appimage, cli-linux, windows]
     runs-on: ubuntu-latest
     permissions: { contents: write }
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - name: Leer versión y comprobar si ya existe la release
+        id: ver
+        run: |
+          V=$(python3 -c "import re;print(re.search(r'__version__ = \"(.*)\"', open('usbfloppymanager/__init__.py').read()).group(1))")
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          if gh release view "v$V" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+          echo "Versión: v$V"
+      - if: steps.ver.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
         with: { path: artifacts }
-      - uses: softprops/action-gh-release@v2
+      - if: steps.ver.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
             artifacts/appimage/*.AppImage
             artifacts/cli-linux/usbfloppy-linux-x86_64
             artifacts/windows/*.exe
+      - if: steps.ver.outputs.exists == 'true'
+        run: echo "La release ${{ steps.ver.outputs.tag }} ya existe; no se publica nada. Sube __version__ para una nueva."
