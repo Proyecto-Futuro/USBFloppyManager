@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 ARCH="${ARCH:-x86_64}"
 rm -rf build dist AppDir
 python -m PyInstaller --noconfirm --clean --onedir --name usbfloppymanager \
-    --collect-all pyfatfs --collect-all fs usbfloppy_app.py
+    --collect-all pyfatfs --collect-all fs --collect-all sv_ttk usbfloppy_app.py
 mkdir -p AppDir/usr
 cp -r dist/usbfloppymanager AppDir/usr/bin
 cp packaging/usbfloppymanager.desktop AppDir/

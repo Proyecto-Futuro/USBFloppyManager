@@ -23,6 +23,7 @@ válidos para dispositivos en crudo de Windows. Ninguna operación escribe fuera
 ```bash
 pip install .            # instala los comandos usbfloppy y usbfloppy-gui
 pip install ".[dnd]"     # opcional: arrastrar y soltar en la GUI (tkinterdnd2)
+# La GUI usa el tema moderno sv-ttk (claro/oscuro, botón ☾/☀); se instala automáticamente.
 ```
 Requiere Python ≥ 3.10. La GUI necesita `tkinter` (Debian/Ubuntu: `sudo apt install python3-tk`).
 
@@ -126,9 +127,9 @@ funciona como la CLI: `./USBFloppyManager-x86_64.AppImage list /dev/sdX`). Para 
 `sudo ./USBFloppyManager-x86_64.AppImage` (si no abre ventana: `xhost +si:localuser:root` y `sudo -E ...`).
 
 El workflow `.github/workflows/release.yml` ejecuta los tests en cada push y, al subir un tag `vX.Y.Z`, compila el
-AppImage (Linux) y los `.exe` (Windows) y los adjunta a la release de GitHub:
+AppImage y binario de CLI `usbfloppy-linux-x86_64` (Linux) y los `.exe` (Windows) y los adjunta a la release de GitHub:
 
 ```bash
-git tag v0.2.2 && git push origin v0.2.2
+git tag v0.3.0 && git push origin v0.3.0   # el tag debe coincidir con __version__
 ```
 El `.exe` y el AppImage compilado en CI no están probados con hardware real (ver «Pendiente de validar»).

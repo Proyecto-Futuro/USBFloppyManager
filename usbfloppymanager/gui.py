@@ -16,22 +16,47 @@ from .core import (DATA_CLUSTERS, SECTOR, Device, GotekError, Slot, backup_devic
                    extract_tree, import_image, restore_device)
 from .devices import UsbDevice, human_size, list_usb_devices
 
+try:  # tema moderno opcional (aspecto Windows 11, claro/oscuro)
+    import sv_ttk
+except Exception:  # pragma: no cover
+    sv_ttk = None
+
 try:  # arrastrar y soltar es opcional
     from tkinterdnd2 import DND_FILES, TkinterDnD
 except Exception:  # pragma: no cover
     DND_FILES = TkinterDnD = None
 
 
+def system_prefers_dark() -> bool:
+    """Mejor esfuerzo para detectar el modo oscuro del sistema (Windows / GNOME / macOS)."""
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+                return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
+        if sys.platform == "darwin":
+            return subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
+                                  capture_output=True, text=True, timeout=2).stdout.strip() == "Dark"
+        out = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                             capture_output=True, text=True, timeout=2).stdout
+        return "dark" in out
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def usage_bar(frac: float, width: int = 12) -> str:
     n = max(0, min(width, round(frac * width)))
-    return "█" * n + "░" * (width - n)
+    return "━" * n + "─" * (width - n)
 
 
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title(f"USBFloppyManager {__version__}")
-        root.geometry("1100x700")
+        root.geometry("1150x760")
+        root.minsize(900, 600)
         self.q: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self.devices: list[UsbDevice] = []
         self.images: list[str] = []
@@ -44,6 +69,13 @@ class App:
         self.fixed_var = tk.BooleanVar(value=False)
         self.short_var = tk.BooleanVar(value=False)
         self.slots_var = tk.IntVar(value=100)
+        self.modern = sv_ttk is not None
+        self.accent = "Accent.TButton" if self.modern else "TButton"
+        if self.modern:
+            sv_ttk.set_theme("dark" if system_prefers_dark() else "light")
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=26)
+        style.configure("Title.TLabel", font=("TkDefaultFont", 11, "bold"))
         self._build()
         self._poll()
         self.reload_devices()
@@ -101,40 +133,47 @@ class App:
 
     # ------------------------------------------------------------ UI
     def _build(self):
-        top = ttk.Frame(self.root, padding=6)
+        top = ttk.Frame(self.root, padding=(12, 10, 12, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="Dispositivo:").pack(side="left")
-        self.dev_combo = ttk.Combobox(top, state="readonly", width=60)
-        self.dev_combo.pack(side="left", padx=4)
+        row1 = ttk.Frame(top)
+        row1.pack(fill="x")
+        ttk.Label(row1, text="Dispositivo", style="Title.TLabel").pack(side="left")
+        self.dev_combo = ttk.Combobox(row1, state="readonly")
+        self.dev_combo.pack(side="left", padx=8, fill="x", expand=True)
         self.dev_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_slots())
-        ttk.Button(top, text="Recargar", command=self.reload_devices).pack(side="left")
-        ttk.Button(top, text="Abrir imagen…", command=self.open_image).pack(side="left", padx=4)
-        ttk.Checkbutton(top, text="Mostrar no extraíbles", variable=self.fixed_var,
-                        command=self.reload_devices).pack(side="left", padx=6)
-        ttk.Checkbutton(top, text="Forzar (peligroso)", variable=self.force_var).pack(side="left")
-        ttk.Label(top, text="Nº slots (0=todos):").pack(side="left", padx=(8, 0))
-        ttk.Spinbox(top, from_=0, to=9999, width=5, textvariable=self.slots_var).pack(side="left")
-        ttk.Button(top, text="Aplicar", command=self.refresh_slots).pack(side="left", padx=2)
-        ttk.Checkbutton(top, text="Nombres 8.3", variable=self.short_var).pack(side="left", padx=6)
+        ttk.Button(row1, text="⟳ Recargar", command=self.reload_devices).pack(side="left")
+        ttk.Button(row1, text="Abrir imagen…", command=self.open_image).pack(side="left", padx=6)
+        if self.modern:
+            ttk.Button(row1, text="☾ / ☀", width=6, command=self.toggle_theme).pack(side="left")
         if sys.platform == "win32":
             from .winraw import is_admin, relaunch_as_admin
             if not is_admin():
-                ttk.Button(top, text="Reiniciar como administrador",
-                           command=lambda: relaunch_as_admin() and self.root.destroy()).pack(side="right")
+                ttk.Button(row1, text="Reiniciar como administrador",
+                           command=lambda: relaunch_as_admin() and self.root.destroy()).pack(side="left", padx=6)
+        row2 = ttk.Frame(top)
+        row2.pack(fill="x", pady=(8, 0))
+        ttk.Label(row2, text="Nº slots (0 = todos)").pack(side="left")
+        ttk.Spinbox(row2, from_=0, to=9999, width=5, textvariable=self.slots_var).pack(side="left", padx=6)
+        ttk.Button(row2, text="Aplicar", command=self.refresh_slots).pack(side="left")
+        ttk.Checkbutton(row2, text="Nombres 8.3", variable=self.short_var).pack(side="left", padx=(18, 0))
+        ttk.Checkbutton(row2, text="Mostrar no extraíbles", variable=self.fixed_var,
+                        command=self.reload_devices).pack(side="left", padx=(18, 0))
+        ttk.Checkbutton(row2, text="Forzar (peligroso)", variable=self.force_var).pack(side="left", padx=(18, 0))
 
         self.nb = ttk.Notebook(self.root)
-        self.nb.pack(fill="both", expand=True, padx=6)
+        self.nb.pack(fill="both", expand=True, padx=12, pady=10)
         self._build_slots_tab()
         self._build_batch_tab()
 
-        bottom = ttk.Frame(self.root, padding=6)
+        bottom = ttk.Frame(self.root, padding=(12, 0, 12, 4))
         bottom.pack(fill="x")
         self.progress = ttk.Progressbar(bottom, length=260)
         self.progress.pack(side="right")
         self.status_var = tk.StringVar(value="Listo")
         ttk.Label(bottom, textvariable=self.status_var).pack(side="left")
-        self.logbox = tk.Text(self.root, height=6, state="disabled")
-        self.logbox.pack(fill="x", padx=6, pady=(0, 6))
+        self.logbox = tk.Text(self.root, height=6, state="disabled", relief="flat", borderwidth=8,
+                              font=("TkFixedFont", 9))
+        self.logbox.pack(fill="x", padx=12, pady=(0, 12))
 
     def _build_slots_tab(self):
         f = ttk.Frame(self.nb, padding=4)
@@ -154,29 +193,32 @@ class App:
         self.slots.configure(yscrollcommand=sb.set)
         self.slots.pack(side="top", fill="both", expand=True)
         self.slots.bind("<<TreeviewSelect>>", lambda e: self.on_slot_select())
-        row = ttk.Frame(left)
-        row.pack(fill="x", pady=4)
-        for text, cmd in (("Formatear", self.act_format), ("Formatear todos", self.act_format_all),
-                          ("Etiqueta…", self.act_label),
-                          ("Importar .img…", self.act_import), ("Exportar .img…", self.act_export),
-                          ("Copia de seguridad…", self.act_backup), ("Restaurar…", self.act_restore)):
-            ttk.Button(row, text=text, command=cmd).pack(side="left", padx=2)
+        for group in ((("Formatear", self.act_format), ("Formatear todos", self.act_format_all),
+                       ("Etiqueta…", self.act_label)),
+                      (("Importar .img…", self.act_import), ("Exportar .img…", self.act_export),
+                       ("Copia de seguridad…", self.act_backup), ("Restaurar…", self.act_restore))):
+            row = ttk.Frame(left)
+            row.pack(fill="x", pady=2)
+            for text, cmd in group:
+                ttk.Button(row, text=text, command=cmd).pack(side="left", padx=2)
 
         right = ttk.Frame(paned)
         paned.add(right, weight=1)
         self.explorer_title = tk.StringVar(value="Selecciona un disquete")
-        ttk.Label(right, textvariable=self.explorer_title).pack(anchor="w")
+        ttk.Label(right, textvariable=self.explorer_title, style="Title.TLabel").pack(anchor="w", pady=(0, 4))
         self.files = ttk.Treeview(right, columns=("size",), selectmode="extended")
         self.files.heading("#0", text="Nombre")
         self.files.heading("size", text="Tamaño")
         self.files.column("size", width=90, anchor="e")
         self.files.pack(fill="both", expand=True)
-        row = ttk.Frame(right)
-        row.pack(fill="x", pady=4)
-        for text, cmd in (("Añadir…", self.act_add), ("Añadir carpeta…", self.act_add_dir),
-                          ("Extraer…", self.act_extract), ("Borrar", self.act_delete),
-                          ("Nueva carpeta…", self.act_mkdir)):
-            ttk.Button(row, text=text, command=cmd).pack(side="left", padx=2)
+        for group in ((("Añadir…", self.act_add), ("Añadir carpeta…", self.act_add_dir),
+                       ("Nueva carpeta…", self.act_mkdir)),
+                      (("Extraer…", self.act_extract), ("Borrar", self.act_delete))):
+            row = ttk.Frame(right)
+            row.pack(fill="x", pady=2)
+            for text, cmd in group:
+                ttk.Button(row, text=text, command=cmd,
+                           style=self.accent if text == "Añadir…" else "TButton").pack(side="left", padx=2)
         if TkinterDnD is not None:
             try:
                 self.files.drop_target_register(DND_FILES)
@@ -209,7 +251,7 @@ class App:
         r = ttk.Frame(f)
         r.pack(fill="x")
         ttk.Button(r, text="Vista previa", command=self.act_preview).pack(side="left")
-        ttk.Button(r, text="Ejecutar copia", command=self.act_batch).pack(side="left", padx=6)
+        ttk.Button(r, text="Ejecutar copia", command=self.act_batch, style=self.accent).pack(side="left", padx=6)
         ttk.Button(r, text="Cancelar", command=self.cancel_flag.set).pack(side="left")
         self.batch_tree = ttk.Treeview(f, columns=("size", "note"), selectmode="browse")
         self.batch_tree.heading("#0", text="Disquete / archivo")
@@ -217,6 +259,10 @@ class App:
         self.batch_tree.heading("note", text="Nota")
         self.batch_tree.column("size", width=90, anchor="e")
         self.batch_tree.pack(fill="both", expand=True, pady=6)
+
+    def toggle_theme(self):
+        if sv_ttk is not None:
+            sv_ttk.toggle_theme()
 
     # ------------------------------------------------------------ utilidades UI
     def status(self, s: str):
