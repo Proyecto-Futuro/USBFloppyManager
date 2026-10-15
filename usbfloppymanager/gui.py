@@ -419,15 +419,25 @@ class App:
 
         def done(infos):
             for i in infos:
-                frac = i.used_bytes / i.total_bytes if i.total_bytes else 0
-                self.slots.insert("", "end", iid=str(i.index), values=(
-                    i.index, i.label if i.valid else "", i.files if i.valid else "",
-                    f"{usage_bar(frac)} {frac * 100:3.0f}%" if i.valid else "", "sí" if i.valid else "no"))
+                self.slots.insert("", "end", iid=str(i.index), values=self._row_values(i))
             for n in keep or []:
                 if self.slots.exists(str(n)):
                     self.slots.selection_add(str(n))
             self.log(f"{self.path}: {len(infos)} slots")
         self.run_async(work, done, "Leyendo slots…")
+
+    @staticmethod
+    def _row_values(i):
+        frac = i.used_bytes / i.total_bytes if i.total_bytes else 0
+        return (i.index, i.label if i.valid else "", i.files if i.valid else "",
+                f"{usage_bar(frac)} {frac * 100:3.0f}%" if i.valid else "", "sí" if i.valid else "no")
+
+    def _fill_files(self, entries):
+        self.files.delete(*self.files.get_children())
+        for e in entries:
+            parent, _, name = e.path.rpartition("/")
+            self.files.insert(parent or "", "end", iid=e.path, text=name, open=True,
+                              values=("" if e.is_dir else human_size(e.size),))
 
     # ------------------------------------------------------------ explorador
     def on_slot_select(self):
@@ -444,13 +454,8 @@ class App:
             with Device(self._ctx_path, slots=self._ctx_slots) as d, Slot(d, n) as sl:
                 return list(sl.walk())
 
-        def done(entries):
-            for e in entries:
-                parent, _, name = e.path.rpartition("/")
-                self.files.insert(parent or "", "end", iid=e.path, text=name, open=True,
-                                  values=("" if e.is_dir else human_size(e.size),))
         try:
-            self.run_async(work, done, f"Leyendo disquete {n}…")
+            self.run_async(work, self._fill_files, f"Leyendo disquete {n}…")
         except GotekError:
             pass
 
@@ -461,15 +466,38 @@ class App:
         p = sel[0]
         return p if self.files.item(p, "values")[0] == "" else p.rpartition("/")[0]
 
-    def _after_edit(self, msg: str):
+    def _after_edit(self, msg: str, slots: Optional[list[int]] = None):
+        """Tras una operación: actualiza SOLO los slots afectados (y el explorador si es el abierto).
+        Con slots=None (operaciones sobre todo el USB) se relee la tabla completa."""
         def done(_):
             self.log(msg)
-            keep = self.selected_slots()
-            n = self.current_slot
-            self.refresh_slots(keep)
-            if n is not None:
-                self.root.after(200, lambda: self.load_slot(n))
+            self.refresh_after_edit(slots)
         return done
+
+    def refresh_after_edit(self, slots: Optional[list[int]]):
+        if slots is None:
+            self.refresh_slots(self.selected_slots())
+            return
+        ns, cur = sorted(set(slots)), self.current_slot
+
+        def work():
+            with Device(self._ctx_path, slots=self._ctx_slots) as d:
+                infos = [d.slot_info(n) for n in ns if n < d.n_slots]
+                entries = None
+                if cur in ns:
+                    ok = next((i.valid for i in infos if i.index == cur), False)
+                    with Slot(d, cur) as sl:
+                        entries = list(sl.walk()) if ok else []
+                return infos, entries
+
+        def done(res):
+            infos, entries = res
+            for i in infos:
+                if self.slots.exists(str(i.index)):
+                    self.slots.item(str(i.index), values=self._row_values(i))
+            if entries is not None and self.current_slot == cur:
+                self._fill_files(entries)
+        self.run_async(work, done, "Actualizando…")
 
     def add_paths(self, paths: list[str]):
         n, dest, short = self.current_slot, self.target_dir(), self.short_var.get()
@@ -480,20 +508,39 @@ class App:
             return
 
         def work():
-            count = 0
+            count, notes = 0, []
+            prefix = "/" + dest.strip("/") + "/" if dest.strip("/") else "/"
             with self.open_dev(True) as d, Slot(d, n, short_names=short) as sl:
                 for p in paths:
                     base = os.path.dirname(p.rstrip(os.sep))
-                    targets = [p] if os.path.isfile(p) else [
-                        os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs]
-                    for t in targets:
-                        rel = os.path.relpath(t, base).replace(os.sep, "/")
-                        with open(t, "rb") as fh:
-                            sl.write("/" + (dest.strip("/") + "/" if dest else "") + rel, fh.read())
+                    if os.path.isdir(p):
+                        for root_dir, dirs, files in os.walk(p):
+                            rel_dir = os.path.relpath(root_dir, base).replace(os.sep, "/")
+                            final = sl.makedirs(prefix + rel_dir)       # también carpetas vacías
+                            if final.lstrip("/").lower() != (prefix + rel_dir).lstrip("/").lower():
+                                notes.append(f"{rel_dir}/ → {final}/")
+                            for f in files:
+                                with open(os.path.join(root_dir, f), "rb") as fh:
+                                    final = sl.write(prefix + rel_dir + "/" + f, fh.read())
+                                count += 1
+                                if final.rsplit("/", 1)[-1].lower() != f.lower():
+                                    notes.append(f"{rel_dir}/{f} → {final}")
+                    else:
+                        with open(p, "rb") as fh:
+                            final = sl.write(prefix + os.path.basename(p), fh.read())
                         count += 1
-            return count
-        self.run_async(work, lambda c: self._after_edit(f"{c} archivo(s) añadidos al disquete {n}")(None),
-                       "Copiando…")
+                        if final.rsplit("/", 1)[-1].lower() != os.path.basename(p).lower():
+                            notes.append(f"{os.path.basename(p)} → {final}")
+            return count, notes
+
+        def done(res):
+            count, notes = res
+            for line in notes[:30]:
+                self.log("  nombre ajustado: " + line)
+            if len(notes) > 30:
+                self.log(f"  … y {len(notes) - 30} nombres más ajustados")
+            self._after_edit(f"{count} archivo(s) añadidos al disquete {n}", [n])(None)
+        self.run_async(work, done, "Copiando…")
 
     def act_add(self):
         paths = filedialog.askopenfilenames(title="Añadir archivos")
@@ -549,7 +596,7 @@ class App:
             with self.open_dev(True) as d, Slot(d, n) as sl:
                 for p in sel:
                     sl.remove(p)
-        self.run_async(work, self._after_edit(f"Borrado en el disquete {n}"), "Borrando…")
+        self.run_async(work, self._after_edit(f"Borrado en el disquete {n}", [n]), "Borrando…")
 
     def act_mkdir(self):
         n = self.current_slot
@@ -561,7 +608,7 @@ class App:
         def work():
             with self.open_dev(True) as d, Slot(d, n, short_names=short) as sl:
                 sl.makedirs(f"{base}/{name}")
-        self.run_async(work, self._after_edit(f"Carpeta creada en el disquete {n}"), "Creando carpeta…")
+        self.run_async(work, self._after_edit(f"Carpeta creada en el disquete {n}", [n]), "Creando carpeta…")
 
     # ------------------------------------------------------------ acciones sobre slots
     def act_format(self):
@@ -573,7 +620,7 @@ class App:
             with self.open_dev(True) as d:
                 for n in sl:
                     d.format_slot(n, f"FD{n:03d}")
-        self.run_async(work, self._after_edit(f"Formateados: {sl}"), "Formateando…")
+        self.run_async(work, self._after_edit(f"Formateados: {sl}", sl), "Formateando…")
 
     def act_format_all(self):
         n_all = len(self.slots.get_children())
@@ -596,7 +643,7 @@ class App:
         def work():
             with self.open_dev(True) as d:
                 d.set_label(n, label)
-        self.run_async(work, self._after_edit(f"Etiqueta del disquete {n}: {label.upper()}"), "Cambiando etiqueta…")
+        self.run_async(work, self._after_edit(f"Etiqueta del disquete {n}: {label.upper()}", [n]), "Cambiando etiqueta…")
 
     def act_import(self):
         n = self.require_slot()
@@ -607,7 +654,7 @@ class App:
         def work():
             with self.open_dev(True) as d:
                 import_image(d, n, p)
-        self.run_async(work, self._after_edit(f"{p} importado en el disquete {n}"), "Importando…")
+        self.run_async(work, self._after_edit(f"{p} importado en el disquete {n}", [n]), "Importando…")
 
     def act_export(self):
         n = self.require_slot()
@@ -703,7 +750,7 @@ class App:
             res, idx = r
             self._fill_preview(res)
             self.log(("Cancelado. " if res.cancelled else "") + f"Copia terminada: disquetes {res.first}..{res.last}. Índice: {idx}")
-            self.refresh_slots()
+            self.refresh_after_edit(list(range(res.first, res.last + 1)))
         self.run_async(work, done, "Copiando por lotes…")
 
 
